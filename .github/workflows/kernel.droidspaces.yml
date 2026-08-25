@@ -61,7 +61,7 @@ jobs:
     - name: Modify Config
       run: |
         cd android-kernel
-        cat << 'EOF' >> /tmp/extra.config
+        cat << 'EOF' >> ${{ runner.temp }}/extra.config
 
         # --- DroidSpaces Configurations ---
         CONFIG_SYSVIPC=y
@@ -87,7 +87,7 @@ jobs:
         cd android-kernel
         tools/bazel --output_user_root="$GITHUB_WORKSPACE/.bazel_cache" build \
           --local_ram_resources=HOST_RAM*0.7 \
-          --defconfig_fragment=/tmp/extra.config \
+          --defconfig_fragment=${{ runner.temp }}/extra.config \
           //common:kernel_aarch64/Image.gz
 
         mkdir -p dist_out
