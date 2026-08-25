@@ -78,26 +78,29 @@ jobs:
     - name: Modify Config
       run: |
         cd android-kernel
-        # 直接追加配置，确保每行开头没有额外空格
         cat << 'EOF' >> common/arch/arm64/configs/gki_defconfig
-# --- DroidSpaces Configurations ---
-CONFIG_SYSVIPC=y
-CONFIG_POSIX_MQUEUE=y
-CONFIG_IPC_NS=y
-CONFIG_PID_NS=y
-CONFIG_DEVTMPFS=y
-CONFIG_NETFILTER_XT_MATCH_ADDRTYPE=y
-CONFIG_USER_NS=y
-CONFIG_NETFILTER_XT_TARGET_REJECT=y
-CONFIG_NETFILTER_XT_TARGET_LOG=y
-CONFIG_NETFILTER_XT_MATCH_RECENT=y
-CONFIG_IP_SET=y
-CONFIG_IP_SET_HASH_IP=y
-CONFIG_IP_SET_HASH_NET=y
-CONFIG_NETFILTER_XT_SET=y
-CONFIG_TMPFS_POSIX_ACL=y
-CONFIG_TMPFS_XATTR=y
-EOF
+
+        # --- DroidSpaces Configurations ---
+        CONFIG_SYSVIPC=y
+        CONFIG_POSIX_MQUEUE=y
+        CONFIG_IPC_NS=y
+        CONFIG_PID_NS=y
+        CONFIG_DEVTMPFS=y
+        CONFIG_NETFILTER_XT_MATCH_ADDRTYPE=y
+        CONFIG_USER_NS=y
+        CONFIG_NETFILTER_XT_TARGET_REJECT=y
+        CONFIG_NETFILTER_XT_TARGET_LOG=y
+        CONFIG_NETFILTER_XT_MATCH_RECENT=y
+        CONFIG_IP_SET=y
+        CONFIG_IP_SET_HASH_IP=y
+        CONFIG_IP_SET_HASH_NET=y
+        CONFIG_NETFILTER_XT_SET=y
+        CONFIG_TMPFS_POSIX_ACL=y
+        CONFIG_TMPFS_XATTR=y
+        EOF
+
+        # 自动格式化并更新 gki_defconfig，消除 Diff 报错
+        tools/bazel run //common:kernel_aarch64_config -- --update
 
     - name: Build Kernel
       run: |
