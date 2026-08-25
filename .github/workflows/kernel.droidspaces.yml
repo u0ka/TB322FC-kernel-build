@@ -1,0 +1,92 @@
+name: Build GKI Image.gz Only (with DroidSpaces)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build Image.gz Only
+    runs-on: ubuntu-24.04
+
+    steps:
+      # 1. 释放 GitHub Runner 磁盘空间与扩展 Swap
+      - name: Maximize Build Space
+        uses: easimon/maximize-build-space@v10
+        with:
+          root-reserve-mb: 8192
+          swap-size-mb: 8192
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
+          remove-codeql: 'true'
+          remove-docker-images: 'true'
+
+      # 2. 安装依赖并配置 repo 工具
+      - name: Install Dependencies & Setup Repo
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git curl python3 build-essential rsync bc libssl-dev
+          
+          mkdir -p ~/bin
+          curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
+          chmod a+x ~/bin/repo
+          echo "$HOME/bin" >> $GITHUB_PATH
+
+      # 3. 配置 Git
+      - name: Configure Git
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+      # 4. 同步 ACK 6.6 源码
+      - name: Sync Kernel Source
+        run: |
+          mkdir -p android-kernel
+          cd android-kernel
+          repo init -u https://android.googlesource.com/kernel/manifest -b common-android15-6.6 --depth=1
+          repo sync -c -j$(nproc) --no-tags --no-clone-bundle
+
+      # 5. 【新增步骤】写入 DroidSpaces 内核配置选项到 gki_defconfig
+      - name: Apply DroidSpaces Configs
+        working-directory: android-kernel
+        run: |
+          cat << 'EOF' >> common/arch/arm64/configs/gki_defconfig
+
+          # --- DroidSpaces Configurations ---
+          CONFIG_SYSVIPC=y
+          CONFIG_POSIX_MQUEUE=y
+          CONFIG_IPC_NS=y
+          CONFIG_PID_NS=y
+          CONFIG_DEVTMPFS=y
+          CONFIG_NETFILTER_XT_MATCH_ADDRTYPE=y
+          CONFIG_USER_NS=y
+          CONFIG_NETFILTER_XT_TARGET_REJECT=y
+          CONFIG_NETFILTER_XT_TARGET_LOG=y
+          CONFIG_NETFILTER_XT_MATCH_RECENT=y
+          CONFIG_IP_SET=y
+          CONFIG_IP_SET_HASH_IP=y
+          CONFIG_IP_SET_HASH_NET=y
+          CONFIG_NETFILTER_XT_SET=y
+          CONFIG_TMPFS_POSIX_ACL=y
+          CONFIG_TMPFS_XATTR=y
+          EOF
+
+      # 6. 使用 Bazel 仅编译 Image.gz
+      - name: Build Only Image.gz
+        working-directory: android-kernel
+        run: |
+          tools/bazel build \
+            --local_ram_resources=HOST_RAM*0.7 \
+            //common:kernel_aarch64/Image.gz
+
+          mkdir -p dist_out
+          find bazel-bin/ -name "Image.gz" -type f -exec cp -L {} dist_out/ \;
+          test -s dist_out/Image.gz || (echo "Error: Image.gz build failed or empty!" && exit 1)
+
+      # 7. 上传 Image.gz 产物
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Image.gz-DroidSpaces-14943902
+          path: android-kernel/dist_out/Image.gz
+          if-no-files-found: error
