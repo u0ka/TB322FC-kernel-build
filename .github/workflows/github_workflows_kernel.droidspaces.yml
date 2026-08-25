@@ -98,17 +98,14 @@ jobs:
         CONFIG_TMPFS_POSIX_ACL=y
         CONFIG_TMPFS_XATTR=y
         EOF
-
-        # 自动格式化并更新 gki_defconfig，消除 Diff 报错
-        tools/bazel run //common:kernel_aarch64_config -- --update
-
+        
     - name: Build Kernel
       run: |
         cd android-kernel
         # 使用 bazel (bazelisk 已安装为 /usr/local/bin/bazel)
         tools/bazel --output_user_root="$GITHUB_WORKSPACE/.bazel_cache" build \
           --local_ram_resources=HOST_RAM*0.7 \
-          --check_defconfig=false \
+          --@kleaf//build/kernel/kleaf:check_defconfig=false \
           //common:kernel_aarch64/Image.gz
 
         mkdir -p dist_out
