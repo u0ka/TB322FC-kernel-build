@@ -82,6 +82,10 @@ jobs:
         CONFIG_TMPFS_XATTR=y
         EOF
         
+        make ARCH=arm64 gki_defconfig
+        make ARCH=arm64 savedefconfig
+        cp defconfig arch/arm64/configs/gki_defconfig
+        
     - name: Build Kernel
       run: |
         cd android-kernel
