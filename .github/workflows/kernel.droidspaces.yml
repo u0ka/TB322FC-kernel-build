@@ -61,7 +61,8 @@ jobs:
     - name: Modify Config
       run: |
         cd android-kernel
-        cat << 'EOF' >> ${{ runner.temp }}/extra.config
+        
+        cat << 'EOF' >> common/extra.config
 
         # --- DroidSpaces Configurations ---
         CONFIG_SYSVIPC=y
@@ -81,13 +82,20 @@ jobs:
         CONFIG_TMPFS_POSIX_ACL=y
         CONFIG_TMPFS_XATTR=y
         EOF
+        
+        cat << 'EOF' >> common/BUILD.bazel
+        filegroup(
+            name = "extra_config",
+            srcs = ["extra.config"],
+        )
+        EOF
 
     - name: Build Kernel
       run: |
         cd android-kernel
         tools/bazel --output_user_root="$GITHUB_WORKSPACE/.bazel_cache" build \
-          --local_ram_resources=HOST_RAM*0.7 \
-          --defconfig_fragment=${{ runner.temp }}/extra.config \
+          --local_resources=memory=HOST_RAM*0.7 \
+          --defconfig_fragment=//common:extra_config \
           //common:kernel_aarch64/Image.gz
 
         mkdir -p dist_out
