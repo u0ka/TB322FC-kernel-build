@@ -82,6 +82,8 @@ jobs:
         CONFIG_TMPFS_XATTR=y
         EOF
 
+        tools/bazel run //common:kernel_aarch64_config -- --update
+
     - name: Build Kernel
       run: |
         cd android-kernel
