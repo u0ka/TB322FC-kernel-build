@@ -87,7 +87,7 @@ jobs:
         cd android-kernel
         tools/bazel --output_user_root="$GITHUB_WORKSPACE/.bazel_cache" build \
           --local_resources=memory=HOST_RAM*0.7 \
-          --check_defconfig=false \
+          --@kleaf//build/kernel/kleaf/flags:check_defconfig=false \
           //common:kernel_aarch64/Image.gz
 
         mkdir -p dist_out
