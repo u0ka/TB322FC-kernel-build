@@ -1,0 +1,119 @@
+name: Build Android Kernel 6.6 (DroidSpaces)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+    - name: Maximize Build Space
+      uses: easimon/maximize-build-space@v5
+      with:
+        root-reserve-mb: 2048
+        swap-size-mb: 1024
+        temp-reserve-mb: 100
+        overprovision-lvm: false
+        pv-loop-path: /pv.img
+        tmp-pv-loop-path: /mnt/tmp-pv.img
+        remove-dotnet: true
+        remove-android: true
+        remove-haskell: true
+
+    - name: Install Dependencies (repo, openjdk, curl, git)
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y python3 git curl build-essential bison flex libssl-dev libelf-dev bc ca-certificates
+        # Install openjdk for Bazel
+        sudo apt-get install -y openjdk-11-jdk
+        # Install Google's repo tool reliably
+        sudo curl -sSL https://storage.googleapis.com/git-repo-downloads/repo -o /usr/local/bin/repo
+        sudo chmod a+x /usr/local/bin/repo
+        # Install bazelisk (provides `bazel` wrapper)
+        sudo curl -sSL https://github.com/bazelbuild/bazelisk/releases/latest/download/bazelisk-linux-amd64 -o /usr/local/bin/bazel
+        sudo chmod a+x /usr/local/bin/bazel
+
+    - name: Cache Bazel output
+      uses: actions/cache@v4
+      with:
+        path: |
+          .bazel_cache
+        key: ${{ runner.os }}-bazel-cache-${{ hashFiles('**/WORKSPACE') }}
+        restore-keys: |
+          ${{ runner.os }}-bazel-cache-
+
+    - name: Init and Sync Kernel Source (With Retry)
+      run: |
+        mkdir -p android-kernel
+        cd android-kernel
+        repo init -u https://android.googlesource.com/kernel/manifest -b common-android15-6.6 --depth=1
+
+        MAX_RETRIES=3
+        RETRY_DELAY=180
+        SYNC_SUCCESS=false
+
+        for i in $(seq 1 $MAX_RETRIES); do
+          echo "=== 开始第 $i/$MAX_RETRIES 次同步 ==="
+          # 使用浅克隆选项以节省时间/流量（如果你的 manifest / 服务端支持）
+          if repo sync -c -j$(nproc) --no-clone-bundle --no-tags --depth=1; then
+            SYNC_SUCCESS=true
+            echo "=== 源码同步成功 ==="
+            break
+          fi
+
+          if [ $i -lt $MAX_RETRIES ]; then
+            echo "警告: 第 $i 次同步失败，等待 ${RETRY_DELAY} 秒后进行下一次重试..."
+            sleep $RETRY_DELAY
+          fi
+        done
+
+        if [ "$SYNC_SUCCESS" = "false" ]; then
+          echo "错误: repo sync 连续失败 $MAX_RETRIES 次，终止流程。"
+          exit 1
+        fi
+
+    - name: Modify Config
+      run: |
+        cd android-kernel
+        # 直接追加配置，确保每行开头没有额外空格
+        cat << 'EOF' >> common/arch/arm64/configs/gki_defconfig
+# --- DroidSpaces Configurations ---
+CONFIG_SYSVIPC=y
+CONFIG_POSIX_MQUEUE=y
+CONFIG_IPC_NS=y
+CONFIG_PID_NS=y
+CONFIG_DEVTMPFS=y
+CONFIG_NETFILTER_XT_MATCH_ADDRTYPE=y
+CONFIG_USER_NS=y
+CONFIG_NETFILTER_XT_TARGET_REJECT=y
+CONFIG_NETFILTER_XT_TARGET_LOG=y
+CONFIG_NETFILTER_XT_MATCH_RECENT=y
+CONFIG_IP_SET=y
+CONFIG_IP_SET_HASH_IP=y
+CONFIG_IP_SET_HASH_NET=y
+CONFIG_NETFILTER_XT_SET=y
+CONFIG_TMPFS_POSIX_ACL=y
+CONFIG_TMPFS_XATTR=y
+EOF
+
+    - name: Build Kernel
+      run: |
+        cd android-kernel
+        # 使用 bazel (bazelisk 已安装为 /usr/local/bin/bazel)
+        tools/bazel --output_user_root="$GITHUB_WORKSPACE/.bazel_cache" build \
+          --local_ram_resources=HOST_RAM*0.7 \
+          --check_defconfig=false \
+          //common:kernel_aarch64/Image.gz
+
+        mkdir -p dist_out
+        find bazel-bin/ -name "Image.gz" -type f -exec cp -L {} dist_out/ \;
+        test -s dist_out/Image.gz || (echo "Error: Image.gz build failed or empty!" && exit 1)
+
+    - name: Upload built Image.gz
+      uses: actions/upload-artifact@v4
+      with:
+        name: kernel-image
+        path: dist_out/Image.gz
