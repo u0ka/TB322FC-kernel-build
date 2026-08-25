@@ -1,45 +1,53 @@
-name: Build Android Kernel 6.6 (DroidSpaces)
-
-on:
-  workflow_dispatch:
-
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      actions: write
-
-    steps:
-    - name: Maximize build space
+- name: Maximize Build Space
       uses: easimon/maximize-build-space@v5
       with:
         root-reserve-mb: 2048
         swap-size-mb: 1024
-        remove-dotnet: 'true'
-        remove-android: 'true'
-        remove-haskell: 'true'
-        remove-codeql: 'true'
-        remove-docker-images: 'true'
+        temp-reserve-mb: 100
+        overprovision-lvm: false
+        pv-loop-path: /pv.img
+        tmp-pv-loop-path: /mnt/tmp-pv.img
+        remove-dotnet: true
+        remove-android: true
+        remove-haskell: true
 
-    - name: Checkout repository
-      uses: actions/checkout@v4
-
-    - name: Set up build dependencies
+    - name: Install Dependencies
       run: |
         sudo apt-get update
         sudo apt-get install -y repo python3 git curl build-essential bison flex libssl-dev libelf-dev bc
 
-    - name: Repo Init & Sync
+    - name: Init and Sync Kernel Source (With Retry)
       run: |
         mkdir -p android-kernel
         cd android-kernel
         repo init -u https://android.googlesource.com/kernel/manifest -b common-android15-6.6 --depth=1
-        repo sync -c -j$(nproc) --no-clone-bundle --no-tags
 
-    - name: Modify GKI Config for DroidSpaces
-      working-directory: ./android-kernel
+        MAX_RETRIES=3
+        RETRY_DELAY=180
+        SYNC_SUCCESS=false
+
+        for i in $(seq 1 $MAX_RETRIES); do
+          echo "=== 开始第 $i/$MAX_RETRIES 次同步 ==="
+          if repo sync -c -j$(nproc) --no-clone-bundle --no-tags; then
+            SYNC_SUCCESS=true
+            echo "=== 源码同步成功 ==="
+            break
+          fi
+
+          if [ $i -lt $MAX_RETRIES ]; then
+            echo "警告: 第 $i 次同步失败，等待 3 分钟后进行下一次重试..."
+            sleep $RETRY_DELAY
+          fi
+        done
+
+        if [ "$SYNC_SUCCESS" = "false" ]; then
+          echo "错误: repo sync 连续失败 $MAX_RETRIES 次，终止流程。"
+          exit 1
+        fi
+
+    - name: Modify Config
       run: |
+        cd android-kernel
         cat << 'EOF' >> common/arch/arm64/configs/gki_defconfig
 
         # --- DroidSpaces Configurations ---
@@ -61,20 +69,13 @@ jobs:
         CONFIG_TMPFS_XATTR=y
         EOF
 
-    - name: Build Kernel Image
-      working-directory: ./android-kernel
+    - name: Build Kernel
       run: |
+        cd android-kernel
         tools/bazel --output_user_root="$GITHUB_WORKSPACE/.bazel_cache" build \
           --local_ram_resources=HOST_RAM*0.7 \
-          --nocheck_defconfig \
           //common:kernel_aarch64/Image.gz
 
         mkdir -p dist_out
         find bazel-bin/ -name "Image.gz" -type f -exec cp -L {} dist_out/ \;
         test -s dist_out/Image.gz || (echo "Error: Image.gz build failed or empty!" && exit 1)
-
-    - name: Upload Kernel Image
-      uses: actions/upload-artifact@v4
-      with:
-        name: DroidSpaces-Image.gz
-        path: android-kernel/dist_out/Image.gz
