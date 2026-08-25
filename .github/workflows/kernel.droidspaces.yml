@@ -1,4 +1,4 @@
-name: Build Android Kernel 6.6 (DroidSpaces)
+name: Build gemini
 
 on:
   workflow_dispatch:
