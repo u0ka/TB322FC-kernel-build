@@ -163,42 +163,38 @@ jobs:
       # ============================================================
       # 4. Apply Custom Kernel Configuration
       # ============================================================
-      - name: Generate custom config fragment
+      - name: Determine defconfig path
+        run: |
+          if [ "${{ inputs.arch }}" = "aarch64" ]; then
+            echo "DEFCONFIG_PATH=arch/arm64/configs/gki_defconfig" >> "$GITHUB_ENV"
+          elif [ "${{ inputs.arch }}" = "x86_64" ]; then
+            echo "DEFCONFIG_PATH=arch/x86/configs/gki_defconfig" >> "$GITHUB_ENV"
+          fi
+
+      - name: Apply custom kernel config
         if: ${{ inputs.custom_config != '' }}
         working-directory: ${{ env.KERNEL_ROOT }}/common
         run: |
-          cat > custom_defconfig << 'CUSTOM_EOF'
+          echo "=== Original defconfig tail ==="
+          tail -5 "$DEFCONFIG_PATH"
+          echo ""
+          echo "=== Appending custom config ==="
+          cat >> "$DEFCONFIG_PATH" << 'CUSTOM_EOF'
+          #
+          # Custom user config
+          #
           ${{ inputs.custom_config }}
           CUSTOM_EOF
-
-          echo "=== Custom config fragment ==="
-          cat custom_defconfig
-          echo "==============================="
-
-          # Export the fragment file in BUILD.bazel so --defconfig_fragment can reference it
-          if ! grep -q 'custom_defconfig' BUILD.bazel; then
-            # Insert exports_files after the load() statements
-            sed -i '/^load(/a\
-          \
-          exports_files(["custom_defconfig"])' BUILD.bazel
-            echo "Added exports_files for custom_defconfig"
-          fi
-
-          echo "CUSTOM_FRAGMENT_FLAG=--defconfig_fragment=//common:custom_defconfig" >> "$GITHUB_ENV"
+          echo "=== Updated defconfig tail ==="
+          tail -20 "$DEFCONFIG_PATH"
 
       - name: Set local version
         if: ${{ inputs.local_version != '' }}
         working-directory: ${{ env.KERNEL_ROOT }}/common
         run: |
-          # Append local version to defconfig
-          echo "CONFIG_LOCALVERSION=\"${{ inputs.local_version }}\"" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_LOCALVERSION_AUTO=n" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_LOCALVERSION=\"${{ inputs.local_version }}\"" >> "$DEFCONFIG_PATH"
+          echo "CONFIG_LOCALVERSION_AUTO=n" >> "$DEFCONFIG_PATH"
           echo "Set local version to ${{ inputs.local_version }}"
-
-      - name: Set debug build flag
-        if: ${{ inputs.debug_build }}
-        run: |
-          echo "DEBUG_FLAG=--debug" >> "$GITHUB_ENV"
 
       # ============================================================
       # 5. Build Kernel
@@ -210,14 +206,18 @@ jobs:
 
           BUILD_TARGET="//common:kernel_${{ inputs.arch }}_dist"
 
-          echo "Building target: $BUILD_TARGET"
-          echo "Extra flags: $CUSTOM_FRAGMENT_FLAG $DEBUG_FLAG"
+          # Bazel build flags (must go BEFORE --)
+          BAZEL_FLAGS=""
+          if [ "${{ inputs.debug_build }}" = "true" ]; then
+            BAZEL_FLAGS="$BAZEL_FLAGS --debug"
+          fi
 
-          tools/bazel run "$BUILD_TARGET" \
+          echo "Building target: $BUILD_TARGET"
+          echo "Bazel flags: $BAZEL_FLAGS"
+
+          tools/bazel run $BAZEL_FLAGS "$BUILD_TARGET" \
             -- \
-            --destdir="$DIST_DIR" \
-            $CUSTOM_FRAGMENT_FLAG \
-            $DEBUG_FLAG
+            --destdir="$DIST_DIR"
 
       - name: Verify build output
         run: |
