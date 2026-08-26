@@ -61,8 +61,6 @@ jobs:
     - name: Modify Config
       run: |
         cd android-kernel
-        #tools/bazel run //common:kernel_aarch64_config -- savedefconfig
-        #cp bazel-bin/common/defconfig common/arch/arm64/configs/gki_defconfig
         cat << 'EOF' >> common/arch/arm64/configs/gki_defconfig
         CONFIG_SYSVIPC=y
         CONFIG_POSIX_MQUEUE=y
@@ -81,8 +79,10 @@ jobs:
         CONFIG_TMPFS_POSIX_ACL=y
         CONFIG_TMPFS_XATTR=y
         EOF
+        
+        tools/bazel --output_user_root="$GITHUB_WORKSPACE/.bazel_cache" run //common:kernel_aarch64_config -- savedefconfig
+        cp bazel-bin/common/defconfig common/arch/arm64/configs/gki_defconfig
         tools/bazel --output_user_root="$GITHUB_WORKSPACE/.bazel_cache" run //common:kernel_aarch64_config -- --update_defconfig
-        #tools/bazel run --output_user_root="$GITHUB_WORKSPACE/.bazel_cache" //common:kernel_aarch64_config -- --update_defconfig
 
     - name: Build Kernel
       run: |
