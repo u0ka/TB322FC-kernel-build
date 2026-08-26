@@ -170,20 +170,23 @@ jobs:
         if: ${{ inputs.custom_config != '' || inputs.local_version != '' }}
         working-directory: ${{ env.KERNEL_ROOT }}/common
         env:
-          CUSTOM_CONFIG: ${{ inputs.custom_config }}
-          LOCAL_VERSION: ${{ inputs.local_version }}
+          # toJSON() escapes newlines as \n so they survive env-var passing.
+          CUSTOM_CONFIG_JSON: ${{ toJSON(inputs.custom_config) }}
+          LOCAL_VERSION_JSON: ${{ toJSON(inputs.local_version) }}
         run: |
           python3 << 'PYEOF'
-          import os
+          import os, json
 
           lines = ["# Custom user defconfig fragment"]
 
-          lv = os.environ.get("LOCAL_VERSION", "").strip()
+          lv_raw = os.environ.get("LOCAL_VERSION_JSON", '""')
+          lv = json.loads(lv_raw).strip()
           if lv:
               lines.append(f'CONFIG_LOCALVERSION="{lv}"')
               lines.append("# CONFIG_LOCALVERSION_AUTO is not set")
 
-          cfg = os.environ.get("CUSTOM_CONFIG", "")
+          cfg_raw = os.environ.get("CUSTOM_CONFIG_JSON", '""')
+          cfg = json.loads(cfg_raw)
           if cfg:
               for line in cfg.splitlines():
                   lines.append(line)
