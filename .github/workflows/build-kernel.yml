@@ -18,9 +18,8 @@ on:
           - x86_64
       custom_config:
         description: |
-          Custom kernel config (one per line, e.g.):
-          CONFIG_KPROBES=y
-          CONFIG_HAVE_KPROBES=y
+          Custom kernel config. Separate each option by space or newline, e.g.:
+          CONFIG_KPROBES=y CONFIG_HAVE_KPROBES=y
           # CONFIG_MODULE_SIG_FORCE is not set
         required: false
         default: ""
@@ -187,13 +186,20 @@ jobs:
               lines.append(f'CONFIG_LOCALVERSION="{lv}"')
               lines.append("# CONFIG_LOCALVERSION_AUTO is not set")
 
-          # custom_config may be null when left empty in the UI
+          # custom_config may be null when left empty in the UI.
+          # GitHub Actions single-line input box turns newlines into spaces,
+          # so we re-parse: extract each CONFIG_XXX=value and # comment as
+          # its own line. Comments are kept intact until the next CONFIG_ entry.
           cfg_raw = os.environ.get("CUSTOM_CONFIG_JSON", '""')
           cfg_val = json.loads(cfg_raw)
           cfg = cfg_val if cfg_val else ""
           if cfg:
-              for line in cfg.splitlines():
-                  lines.append(line)
+              import re
+              pattern = r'CONFIG_\w+=(?:"[^"]*"|\S+)|#.*?(?=\s+CONFIG_\w+=|$)'
+              for item in re.findall(pattern, cfg):
+                  item = item.strip()
+                  if item:
+                      lines.append(item)
 
           with open("custom_defconfig", "w") as f:
               f.write("\n".join(lines) + "\n")
