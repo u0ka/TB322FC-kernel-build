@@ -80,15 +80,12 @@ jobs:
         CONFIG_TMPFS_XATTR=y
         EOF
         
-        tools/bazel --output_user_root="$GITHUB_WORKSPACE/.bazel_cache" run //common:kernel_aarch64_config -- savedefconfig
-        cp bazel-bin/common/defconfig common/arch/arm64/configs/gki_defconfig
-        tools/bazel --output_user_root="$GITHUB_WORKSPACE/.bazel_cache" run //common:kernel_aarch64_config -- --update_defconfig
-
     - name: Build Kernel
       run: |
         cd android-kernel
         tools/bazel --output_user_root="$GITHUB_WORKSPACE/.bazel_cache" build \
           --verbose_failures \
+          --//build/kernel/kleaf:check_defconfig=false \
           --local_resources=memory=HOST_RAM*0.7 \
           //common:kernel_aarch64/Image.gz
 
