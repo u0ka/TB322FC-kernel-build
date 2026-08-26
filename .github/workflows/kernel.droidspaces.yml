@@ -81,8 +81,8 @@ jobs:
         CONFIG_TMPFS_POSIX_ACL=y
         CONFIG_TMPFS_XATTR=y
         EOF
-        
-        tools/bazel run --output_user_root="$GITHUB_WORKSPACE/.bazel_cache" //common:kernel_aarch64_config -- --update_defconfig
+        tools/bazel --output_user_root="$GITHUB_WORKSPACE/.bazel_cache" run //common:kernel_aarch64_config -- --update_defconfig
+        #tools/bazel run --output_user_root="$GITHUB_WORKSPACE/.bazel_cache" //common:kernel_aarch64_config -- --update_defconfig
 
     - name: Build Kernel
       run: |
