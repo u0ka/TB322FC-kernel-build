@@ -167,7 +167,7 @@ jobs:
       #     won't fail.)
       # ============================================================
       - name: Create custom defconfig fragment
-        if: ${{ inputs.custom_config != '' || inputs.local_version != '' }}
+        if: ${{ inputs.custom_config || inputs.local_version }}
         working-directory: ${{ env.KERNEL_ROOT }}/common
         env:
           # toJSON() escapes newlines as \n so they survive env-var passing.
@@ -179,14 +179,18 @@ jobs:
 
           lines = ["# Custom user defconfig fragment"]
 
+          # local_version may be null when left empty in the UI
           lv_raw = os.environ.get("LOCAL_VERSION_JSON", '""')
-          lv = json.loads(lv_raw).strip()
+          lv_val = json.loads(lv_raw)
+          lv = lv_val.strip() if lv_val else ""
           if lv:
               lines.append(f'CONFIG_LOCALVERSION="{lv}"')
               lines.append("# CONFIG_LOCALVERSION_AUTO is not set")
 
+          # custom_config may be null when left empty in the UI
           cfg_raw = os.environ.get("CUSTOM_CONFIG_JSON", '""')
-          cfg = json.loads(cfg_raw)
+          cfg_val = json.loads(cfg_raw)
+          cfg = cfg_val if cfg_val else ""
           if cfg:
               for line in cfg.splitlines():
                   lines.append(line)
@@ -202,7 +206,7 @@ jobs:
           PYEOF
 
       - name: Export fragment in BUILD.bazel
-        if: ${{ inputs.custom_config != '' || inputs.local_version != '' }}
+        if: ${{ inputs.custom_config || inputs.local_version }}
         working-directory: ${{ env.KERNEL_ROOT }}/common
         run: |
           python3 << 'PYEOF'
