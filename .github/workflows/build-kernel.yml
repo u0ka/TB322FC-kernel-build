@@ -161,40 +161,82 @@ jobs:
           head -5 Makefile | grep -E '^(VERSION|PATCHLEVEL|SUBLEVEL|EXTRAVERSION)'
 
       # ============================================================
-      # 4. Apply Custom Kernel Configuration
+      # 4. Apply Custom Kernel Configuration via --defconfig_fragment
+      #    (Kleaf applies fragments AFTER .config is generated, so the
+      #     source gki_defconfig stays untouched and savedefconfig check
+      #     won't fail.)
       # ============================================================
-      - name: Determine defconfig path
+      - name: Create custom defconfig fragment
+        if: ${{ inputs.custom_config != '' || inputs.local_version != '' }}
+        working-directory: ${{ env.KERNEL_ROOT }}/common
         run: |
-          if [ "${{ inputs.arch }}" = "aarch64" ]; then
-            echo "DEFCONFIG_PATH=arch/arm64/configs/gki_defconfig" >> "$GITHUB_ENV"
-          elif [ "${{ inputs.arch }}" = "x86_64" ]; then
-            echo "DEFCONFIG_PATH=arch/x86/configs/gki_defconfig" >> "$GITHUB_ENV"
+          cat > custom_defconfig << 'FRAGMENT_EOF'
+          # Custom user defconfig fragment
+          FRAGMENT_EOF
+
+          if [ -n "${{ inputs.local_version }}" ]; then
+            cat >> custom_defconfig << LV_EOF
+          CONFIG_LOCALVERSION="${{ inputs.local_version }}"
+          # CONFIG_LOCALVERSION_AUTO is not set
+          LV_EOF
           fi
 
-      - name: Apply custom kernel config
-        if: ${{ inputs.custom_config != '' }}
-        working-directory: ${{ env.KERNEL_ROOT }}/common
-        run: |
-          echo "=== Original defconfig tail ==="
-          tail -5 "$DEFCONFIG_PATH"
-          echo ""
-          echo "=== Appending custom config ==="
-          cat >> "$DEFCONFIG_PATH" << 'CUSTOM_EOF'
-          #
-          # Custom user config
-          #
+          if [ -n "${{ inputs.custom_config }}" ]; then
+            cat >> custom_defconfig << 'CFG_EOF'
           ${{ inputs.custom_config }}
-          CUSTOM_EOF
-          echo "=== Updated defconfig tail ==="
-          tail -20 "$DEFCONFIG_PATH"
+          CFG_EOF
+          fi
 
-      - name: Set local version
-        if: ${{ inputs.local_version != '' }}
+          echo "=== custom_defconfig fragment ==="
+          cat custom_defconfig
+          echo "=================================="
+
+      - name: Export fragment in BUILD.bazel
+        if: ${{ inputs.custom_config != '' || inputs.local_version != '' }}
         working-directory: ${{ env.KERNEL_ROOT }}/common
         run: |
-          echo "CONFIG_LOCALVERSION=\"${{ inputs.local_version }}\"" >> "$DEFCONFIG_PATH"
-          echo "CONFIG_LOCALVERSION_AUTO=n" >> "$DEFCONFIG_PATH"
-          echo "Set local version to ${{ inputs.local_version }}"
+          python3 << 'PYEOF'
+          import sys
+
+          path = "BUILD.bazel"
+          with open(path, "r") as f:
+              lines = f.readlines()
+
+          # Already exported?
+          if any("custom_defconfig" in l for l in lines):
+              print("custom_defconfig already exported, skipping")
+              sys.exit(0)
+
+          # Find the end of the last load() statement (may span multiple lines)
+          insert_idx = 0
+          depth = 0
+          in_load = False
+          for i, line in enumerate(lines):
+              s = line.lstrip()
+              if not in_load and s.startswith("load("):
+                  in_load = True
+                  depth = line.count("(") - line.count(")")
+              elif in_load:
+                  depth += line.count("(") - line.count(")")
+              if in_load and depth <= 0:
+                  insert_idx = i + 1
+                  in_load = False
+
+          # If no load() found, insert at top
+          if insert_idx == 0:
+              insert_idx = 0
+
+          lines.insert(insert_idx, '\nexports_files(["custom_defconfig"])\n')
+
+          with open(path, "w") as f:
+              f.writelines(lines)
+
+          print(f"Inserted exports_files after line {insert_idx}")
+          PYEOF
+
+          echo "=== BUILD.bazel first 25 lines ==="
+          head -25 BUILD.bazel
+          echo "===================================="
 
       # ============================================================
       # 5. Build Kernel
@@ -206,8 +248,11 @@ jobs:
 
           BUILD_TARGET="//common:kernel_${{ inputs.arch }}_dist"
 
-          # Bazel build flags (must go BEFORE --)
+          # Bazel build flags — MUST appear before the target (before --)
           BAZEL_FLAGS=""
+          if [ "${{ inputs.custom_config }}" != "" ] || [ "${{ inputs.local_version }}" != "" ]; then
+            BAZEL_FLAGS="$BAZEL_FLAGS --defconfig_fragment=//common:custom_defconfig"
+          fi
           if [ "${{ inputs.debug_build }}" = "true" ]; then
             BAZEL_FLAGS="$BAZEL_FLAGS --debug"
           fi
