@@ -169,27 +169,34 @@ jobs:
       - name: Create custom defconfig fragment
         if: ${{ inputs.custom_config != '' || inputs.local_version != '' }}
         working-directory: ${{ env.KERNEL_ROOT }}/common
+        env:
+          CUSTOM_CONFIG: ${{ inputs.custom_config }}
+          LOCAL_VERSION: ${{ inputs.local_version }}
         run: |
-          cat > custom_defconfig << 'FRAGMENT_EOF'
-          # Custom user defconfig fragment
-          FRAGMENT_EOF
+          python3 << 'PYEOF'
+          import os
 
-          if [ -n "${{ inputs.local_version }}" ]; then
-            cat >> custom_defconfig << LV_EOF
-          CONFIG_LOCALVERSION="${{ inputs.local_version }}"
-          # CONFIG_LOCALVERSION_AUTO is not set
-          LV_EOF
-          fi
+          lines = ["# Custom user defconfig fragment"]
 
-          if [ -n "${{ inputs.custom_config }}" ]; then
-            cat >> custom_defconfig << 'CFG_EOF'
-          ${{ inputs.custom_config }}
-          CFG_EOF
-          fi
+          lv = os.environ.get("LOCAL_VERSION", "").strip()
+          if lv:
+              lines.append(f'CONFIG_LOCALVERSION="{lv}"')
+              lines.append("# CONFIG_LOCALVERSION_AUTO is not set")
 
-          echo "=== custom_defconfig fragment ==="
-          cat custom_defconfig
-          echo "=================================="
+          cfg = os.environ.get("CUSTOM_CONFIG", "")
+          if cfg:
+              for line in cfg.splitlines():
+                  lines.append(line)
+
+          with open("custom_defconfig", "w") as f:
+              f.write("\n".join(lines) + "\n")
+
+          print("=== custom_defconfig fragment ===")
+          with open("custom_defconfig") as f:
+              print(f.read())
+          print("==================================")
+          print(f"Total lines: {len(lines)}")
+          PYEOF
 
       - name: Export fragment in BUILD.bazel
         if: ${{ inputs.custom_config != '' || inputs.local_version != '' }}
