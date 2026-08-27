@@ -1,0 +1,348 @@
+name: Build Android Kernel 6.6.118 (GKI)
+
+on:
+  workflow_dispatch:
+    inputs:
+      manifest_branch:
+        description: "Kernel manifest branch"
+        required: true
+        default: "common-android15-6.6"
+        type: string
+      arch:
+        description: "Target architecture"
+        required: true
+        default: "aarch64"
+        type: choice
+        options:
+          - aarch64
+          - x86_64
+      custom_config:
+        description: |
+          Custom kernel config. Separate each option by space or newline, e.g.:
+          CONFIG_KPROBES=y CONFIG_HAVE_KPROBES=y
+          # CONFIG_MODULE_SIG_FORCE is not set
+        required: false
+        default: ""
+        type: string
+      local_version:
+        description: "Kernel local version suffix (e.g. -mykernel)"
+        required: false
+        default: ""
+        type: string
+      build_boot_img:
+        description: "Build GKI boot image"
+        required: false
+        default: true
+        type: boolean
+      debug_build:
+        description: "Debug build (enables debug info, disables optimizations)"
+        required: false
+        default: false
+        type: boolean
+      enable_ccache:
+        description: "Enable ccache for faster rebuilds"
+        required: false
+        default: true
+        type: boolean
+
+env:
+  MANIFEST_URL: "https://android.googlesource.com/kernel/manifest"
+  KERNEL_ROOT: ${{ github.workspace }}/kernel
+  DIST_DIR: ${{ github.workspace }}/kernel/dist
+
+jobs:
+  build:
+    name: Build Kernel (${{ inputs.arch }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    permissions:
+      contents: read
+
+    steps:
+      # ============================================================
+      # 1. Environment Preparation
+      # ============================================================
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: false
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            git \
+            curl \
+            wget \
+            python3 \
+            python3-pip \
+            openjdk-17-jdk-headless \
+            build-essential \
+            bc \
+            bison \
+            flex \
+            libssl-dev \
+            libelf-dev \
+            libncurses-dev \
+            rsync \
+            cpio \
+            ccache \
+            xz-utils \
+            zstd
+          python3 -m pip install --quiet --upgrade pip
+
+      - name: Install repo tool
+        run: |
+          mkdir -p "$HOME/bin"
+          curl -sSL https://storage.googleapis.com/git-repo-downloads/repo -o "$HOME/bin/repo"
+          chmod a+x "$HOME/bin/repo"
+          echo "$HOME/bin" >> "$GITHUB_PATH"
+
+      - name: Configure git
+        run: |
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "actions@github.com"
+          git config --global color.ui false
+
+      # ============================================================
+      # 2. Caching
+      # ============================================================
+      - name: Set up ccache
+        if: ${{ inputs.enable_ccache }}
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-${{ inputs.manifest_branch }}-${{ inputs.arch }}-${{ github.run_id }}
+          restore-keys: |
+            ccache-${{ inputs.manifest_branch }}-${{ inputs.arch }}-
+            ccache-${{ inputs.manifest_branch }}-
+
+      - name: Set up bazel cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/bazel
+          key: bazel-${{ inputs.manifest_branch }}-${{ inputs.arch }}-${{ github.run_id }}
+          restore-keys: |
+            bazel-${{ inputs.manifest_branch }}-${{ inputs.arch }}-
+            bazel-${{ inputs.manifest_branch }}-
+
+      # ============================================================
+      # 3. Sync Kernel Source
+      # ============================================================
+      - name: Initialize repo
+        run: |
+          mkdir -p "$KERNEL_ROOT"
+          cd "$KERNEL_ROOT"
+          #repo init -u "$MANIFEST_URL" -b "${{ inputs.manifest_branch }}" --depth=1
+          repo init -u https://android.googlesource.com/kernel/manifest -b 350f378eb496
+        env:
+          GIT_TERMINAL_PROMPT: "0"
+
+      - name: Sync source code
+        run: |
+          cd "$KERNEL_ROOT"
+          repo sync -c -j$(nproc) --no-clone-bundle --no-tags
+        env:
+          GIT_TERMINAL_PROMPT: "0"
+
+      - name: Show kernel version
+        run: |
+          cd "$KERNEL_ROOT/common"
+          echo "Kernel source version:"
+          head -5 Makefile | grep -E '^(VERSION|PATCHLEVEL|SUBLEVEL|EXTRAVERSION)'
+
+      # ============================================================
+      # 4. Apply Custom Kernel Configuration via --defconfig_fragment
+      #    (Kleaf applies fragments AFTER .config is generated, so the
+      #     source gki_defconfig stays untouched and savedefconfig check
+      #     won't fail.)
+      # ============================================================
+      - name: Create custom defconfig fragment
+        if: ${{ inputs.custom_config || inputs.local_version }}
+        working-directory: ${{ env.KERNEL_ROOT }}/common
+        env:
+          # toJSON() escapes newlines as \n so they survive env-var passing.
+          CUSTOM_CONFIG_JSON: ${{ toJSON(inputs.custom_config) }}
+          LOCAL_VERSION_JSON: ${{ toJSON(inputs.local_version) }}
+        run: |
+          python3 << 'PYEOF'
+          import os, json
+
+          lines = ["# Custom user defconfig fragment"]
+
+          # local_version may be null when left empty in the UI
+          lv_raw = os.environ.get("LOCAL_VERSION_JSON", '""')
+          lv_val = json.loads(lv_raw)
+          lv = lv_val.strip() if lv_val else ""
+          if lv:
+              lines.append(f'CONFIG_LOCALVERSION="{lv}"')
+              lines.append("# CONFIG_LOCALVERSION_AUTO is not set")
+
+          # custom_config may be null when left empty in the UI.
+          # GitHub Actions single-line input box turns newlines into spaces,
+          # so we re-parse: extract each CONFIG_XXX=value and # comment as
+          # its own line. Comments are kept intact until the next CONFIG_ entry.
+          cfg_raw = os.environ.get("CUSTOM_CONFIG_JSON", '""')
+          cfg_val = json.loads(cfg_raw)
+          cfg = cfg_val if cfg_val else ""
+          if cfg:
+              import re
+              pattern = r'CONFIG_\w+=(?:"[^"]*"|\S+)|#.*?(?=\s+CONFIG_\w+=|$)'
+              for item in re.findall(pattern, cfg):
+                  item = item.strip()
+                  if item:
+                      lines.append(item)
+
+          with open("custom_defconfig", "w") as f:
+              f.write("\n".join(lines) + "\n")
+
+          print("=== custom_defconfig fragment ===")
+          with open("custom_defconfig") as f:
+              print(f.read())
+          print("==================================")
+          print(f"Total lines: {len(lines)}")
+          PYEOF
+
+      - name: Export fragment in BUILD.bazel
+        if: ${{ inputs.custom_config || inputs.local_version }}
+        working-directory: ${{ env.KERNEL_ROOT }}/common
+        run: |
+          python3 << 'PYEOF'
+          import sys
+
+          path = "BUILD.bazel"
+          with open(path, "r") as f:
+              lines = f.readlines()
+
+          # Already exported?
+          if any("custom_defconfig" in l for l in lines):
+              print("custom_defconfig already exported, skipping")
+              sys.exit(0)
+
+          # Find the end of the last load() statement (may span multiple lines)
+          insert_idx = 0
+          depth = 0
+          in_load = False
+          for i, line in enumerate(lines):
+              s = line.lstrip()
+              if not in_load and s.startswith("load("):
+                  in_load = True
+                  depth = line.count("(") - line.count(")")
+              elif in_load:
+                  depth += line.count("(") - line.count(")")
+              if in_load and depth <= 0:
+                  insert_idx = i + 1
+                  in_load = False
+
+          # If no load() found, insert at top
+          if insert_idx == 0:
+              insert_idx = 0
+
+          lines.insert(insert_idx, '\nexports_files(["custom_defconfig"])\n')
+
+          with open(path, "w") as f:
+              f.writelines(lines)
+
+          print(f"Inserted exports_files after line {insert_idx}")
+          PYEOF
+
+          echo "=== BUILD.bazel first 25 lines ==="
+          head -25 BUILD.bazel
+          echo "===================================="
+
+      # ============================================================
+      # 5. Build Kernel
+      # ============================================================
+      - name: Build kernel (Bazel)
+        working-directory: ${{ env.KERNEL_ROOT }}
+        run: |
+          mkdir -p "$DIST_DIR"
+
+          BUILD_TARGET="//common:kernel_${{ inputs.arch }}_dist"
+
+          # Bazel build flags — MUST appear before the target (before --)
+          BAZEL_FLAGS=""
+          if [ "${{ inputs.custom_config }}" != "" ] || [ "${{ inputs.local_version }}" != "" ]; then
+            BAZEL_FLAGS="$BAZEL_FLAGS --defconfig_fragment=//common:custom_defconfig"
+          fi
+          if [ "${{ inputs.debug_build }}" = "true" ]; then
+            BAZEL_FLAGS="$BAZEL_FLAGS --debug"
+          fi
+
+          echo "Building target: $BUILD_TARGET"
+          echo "Bazel flags: $BAZEL_FLAGS"
+
+          tools/bazel run $BAZEL_FLAGS "$BUILD_TARGET" \
+            -- \
+            --destdir="$DIST_DIR"
+
+      - name: Verify build output
+        run: |
+          echo "=== Build artifacts ==="
+          ls -lah "$DIST_DIR/"
+          echo ""
+          echo "=== Kernel image details ==="
+          if [ -f "$DIST_DIR/Image" ]; then
+            file "$DIST_DIR/Image"
+          fi
+          if [ -f "$DIST_DIR/Image.gz" ]; then
+            file "$DIST_DIR/Image.gz"
+          fi
+          echo ""
+          echo "=== Module count ==="
+          find "$DIST_DIR" -name "*.ko" | wc -l
+
+      # ============================================================
+      # 6. Package & Upload Artifacts
+      # ============================================================
+      - name: Create artifact archive
+        run: |
+          ARTIFACT_NAME="android-kernel-${{ inputs.manifest_branch }}-${{ inputs.arch }}"
+          if [ -n "${{ inputs.local_version }}" ]; then
+            ARTIFACT_NAME="${ARTIFACT_NAME}${{ inputs.local_version }}"
+          fi
+          ARTIFACT_NAME="${ARTIFACT_NAME}-$(date +%Y%m%d-%H%M)"
+
+          cd "$DIST_DIR"
+          tar -czf "$HOME/${ARTIFACT_NAME}.tar.gz" .
+          echo "ARTIFACT_PATH=$HOME/${ARTIFACT_NAME}.tar.gz" >> "$GITHUB_ENV"
+          echo "ARTIFACT_NAME=${ARTIFACT_NAME}" >> "$GITHUB_ENV"
+          echo "Artifact size: $(du -h "$HOME/${ARTIFACT_NAME}.tar.gz" | cut -f1)"
+
+      - name: Upload kernel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: ${{ env.ARTIFACT_PATH }}
+          compression-level: 0
+          retention-days: 30
+
+      - name: Build summary
+        run: |
+          echo "## Kernel Build Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Branch:** \`${{ inputs.manifest_branch }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Architecture:** \`${{ inputs.arch }}\`" >> "$GITHUB_STEP_SUMMARY"
+          if [ -n "${{ inputs.local_version }}" ]; then
+            echo "- **Local version:** \`${{ inputs.local_version }}\`" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [ "${{ inputs.debug_build }}" == "true" ]; then
+            echo "- **Build type:** Debug" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "- **Build type:** Release" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "- **Artifact:** \`${{ env.ARTIFACT_NAME }}.tar.gz\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Artifacts in dist:" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          ls -1 "$DIST_DIR/" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
