@@ -142,15 +142,19 @@ jobs:
         run: |
           mkdir -p "$KERNEL_ROOT"
           cd "$KERNEL_ROOT"
-          #repo init -u "$MANIFEST_URL" -b "${{ inputs.manifest_branch }}" --depth=1
-          repo init -u https://android.googlesource.com/kernel/manifest -b 350f378eb496
+          repo init -u "$MANIFEST_URL" -b "${{ inputs.manifest_branch }}" --depth=1
+          #repo init -u https://android.googlesource.com/kernel/manifest -b 350f378eb496
         env:
           GIT_TERMINAL_PROMPT: "0"
 
       - name: Sync source code
         run: |
           cd "$KERNEL_ROOT"
-          repo sync -c -j$(nproc) --no-clone-bundle --no-tags
+          repo sync -c -j$(nproc)
+          cd common
+          git fetch --depth 1 origin 350f378eb496
+          git checkout FETCH_HEAD
+          
         env:
           GIT_TERMINAL_PROMPT: "0"
 
