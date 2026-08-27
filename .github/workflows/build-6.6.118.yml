@@ -136,25 +136,21 @@ jobs:
             bazel-${{ inputs.manifest_branch }}-
 
       # ============================================================
-      # 3. Sync Kernel Source
+      # 3. Sync Kernel Source (clone only kernel/common at a specific commit)
       # ============================================================
-      - name: Initialize repo
+      - name: Clone kernel/common at specific commit
         run: |
           mkdir -p "$KERNEL_ROOT"
           cd "$KERNEL_ROOT"
-          repo init -u "$MANIFEST_URL" -b "${{ inputs.manifest_branch }}" --depth=1
-          #repo init -u https://android.googlesource.com/kernel/manifest -b 350f378eb496
-        env:
-          GIT_TERMINAL_PROMPT: "0"
 
-      - name: Sync source code
-        run: |
-          cd "$KERNEL_ROOT"
-          repo sync -c -j$(nproc)
+          # Initialize an empty repo and fetch only the specific commit to keep the checkout minimal
+          git init common
           cd common
-          git fetch --depth 1 origin 350f378eb496
+          git remote add origin https://android.googlesource.com/kernel/common.git
+
+          # Fetch the specific commit (shallow) and check it out
+          git fetch --depth=1 origin 350f378eb496
           git checkout FETCH_HEAD
-          
         env:
           GIT_TERMINAL_PROMPT: "0"
 
